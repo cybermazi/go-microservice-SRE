@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: service-b-deployment
+  name: service-b-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: service-b-deployment
+  template:
+    metadata:
+      labels:
+        app: service-b-deployment
+    spec:
+      containers:
+      - image: takalezi6/service-b:latest
+        name: service-b
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3002
