@@ -1,4 +1,4 @@
-module service_b
+module github.com/cybermazi/go-microservice-SRE
 
 go 1.22.2
 
