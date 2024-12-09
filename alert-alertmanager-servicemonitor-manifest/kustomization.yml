@@ -6,3 +6,5 @@ resources:
   #- email-secrets.yml
   #- alertmangerconfig.yml
   - serviceMonitor.yml
+  - custom_kube_prometheus_stack.yml
+
