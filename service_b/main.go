@@ -5,11 +5,15 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"github.com/joho/godotenv"
 	"time"
-
+	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/exporters/trace/jaeger"
+	"go.opentelemetry.io/otel/sdk/resource"
 )
 
 var (
@@ -39,8 +43,56 @@ func init() {
 	prometheus.MustRegister(httpRequestDuration)
 }
 
+// initializeTracing initializes OpenTelemetry and the Jaeger exporter
+func initializeTracing() (func(), error) {
+	// Create a Jaeger exporter
+	jaegerEndpoint := os.Getenv("JAEGER_ENDPOINT")
+	if jaegerEndpoint == "" {
+		jaegerEndpoint = "http://localhost:5775" // Default endpoint if not set
+	}
+
+	exp, err := jaeger.NewRawExporter(
+		jaeger.WithCollectorEndpoint(jaegerEndpoint),
+		jaeger.WithProcess(jaeger.Process{
+			ServiceName: "service-b",
+			Tags: []attribute.KeyValue{
+				attribute.String("env", "production"),
+			},
+		}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Jaeger exporter: %w", err)
+	}
+
+	// Set up the tracer provider with the Jaeger exporter
+	tp := trace.NewTracerProvider(
+		trace.WithBatcher(exp),
+		trace.WithResource(resource.NewWithAttributes(
+			attribute.String("service.name", "service-b"),
+		)),
+	)
+
+	// Register the tracer provider globally
+	otel.SetTracerProvider(tp)
+
+	// Return a function to stop the tracer provider when the application exits
+	return func() {
+		if err := tp.Shutdown(context.Background()); err != nil {
+			log.Fatalf("failed to stop tracer provider: %v", err)
+		}
+	}, nil
+}
+
 // helloHandler is the handler for /hello endpoint
 func helloHandler(w http.ResponseWriter, r *http.Request) {
+	// Create a new trace span
+	tracer := otel.Tracer("service-b")
+	ctx, span := tracer.Start(r.Context(), "helloHandler")
+	defer span.End()
+
+	// Add some attributes to the span
+	span.SetAttributes(attribute.String("method", r.Method))
+
 	// Start tracking the request duration
 	start := time.Now()
 	w.WriteHeader(http.StatusOK)
@@ -50,6 +102,9 @@ func helloHandler(w http.ResponseWriter, r *http.Request) {
 	duration := time.Since(start).Seconds()
 	httpRequestCounter.WithLabelValues(r.Method, r.URL.Path, fmt.Sprintf("%d", http.StatusOK)).Inc()
 	httpRequestDuration.WithLabelValues(r.Method, r.URL.Path, fmt.Sprintf("%d", http.StatusOK)).Observe(duration)
+
+	// You can add custom events or further attributes here
+	span.AddEvent("Hello response sent")
 }
 
 // metricsHandler exposes the metrics for Prometheus scraping
@@ -61,8 +116,15 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	// Initialize tracing
+	shutdown, err := initializeTracing()
+	if err != nil {
+		log.Fatal("Error initializing tracing: ", err)
+	}
+	defer shutdown()
+
 	// Load environment variables from the .env file
-	err := godotenv.Load()
+	err = godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
